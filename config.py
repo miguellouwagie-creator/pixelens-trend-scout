@@ -13,23 +13,24 @@ load_dotenv()
 class Config:
     """Centralized configuration for the Trend Scout application."""
     
-    # Target Hashtags for Studio Pixelens niche
+    # Target Hashtags - Elite Web Design Niche
+    # Focused on premium, high-performance design communities
     TARGET_HASHTAGS = [
-        'webdesign',
-        'uidesign',
-        'astrobuild',
-        'webdevelopment',
-        'creativeagency',
-        'designtips',
-        'uiux'
+        'saasdesign',      # SaaS-focused design work
+        'framer',          # Framer design community (high quality)
+        'astrojs',         # Astro framework (Studio Pixelens specialty)
+        'minimalistui',    # Minimalist aesthetic (brand alignment)
+        'awwwards',        # Award-winning design showcase
+        'uifoundations',   # Advanced UI/UX foundations
+        'webflow'          # Webflow design community
     ]
     
     # Instagram Authentication
     INSTAGRAM_USERNAME = os.getenv('INSTAGRAM_USERNAME', '')
     INSTAGRAM_PASSWORD = os.getenv('INSTAGRAM_PASSWORD', '')
     
-    # Viral Algorithm Thresholds
-    ER_THRESHOLD = float(os.getenv('ER_THRESHOLD', 0.03))  # 3% by default
+    # Viral Algorithm Thresholds - Elite Quality Standards
+    ER_THRESHOLD = float(os.getenv('ER_THRESHOLD', 0.05))  # 5% by default (top 5% content)
     MIN_FOLLOWERS = int(os.getenv('MIN_FOLLOWERS', 1000))
     MAX_FOLLOWERS = int(os.getenv('MAX_FOLLOWERS', 500000))
     POST_AGE_DAYS = int(os.getenv('POST_AGE_DAYS', 45))
