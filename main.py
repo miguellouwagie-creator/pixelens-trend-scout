@@ -31,6 +31,8 @@ class TrendScout:
         # Validate configuration
         Config.validate()
         
+        # Configuración con CAMUFLAJE DE NAVEGADOR (User Agent Spoofing)
+        # Configuración con CAMUFLAJE DE NAVEGADOR (User Agent Spoofing)
         self.loader = instaloader.Instaloader(
             download_videos=False,
             download_video_thumbnails=False,
@@ -39,7 +41,9 @@ class TrendScout:
             save_metadata=False,
             compress_json=False,
             post_metadata_txt_pattern='',
-            quiet=True
+            quiet=True,
+            # ESTA ES LA LÍNEA QUE FALTABA: El disfraz de Edge
+            user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36 Edg/120.0.0.0"
         )
         
         self.safety = SafetyManager()
