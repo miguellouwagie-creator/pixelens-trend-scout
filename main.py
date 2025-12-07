@@ -64,37 +64,93 @@ class TrendScout:
     
     def authenticate(self):
         """
-        Authenticate with Instagram.
-        Uses session persistence to minimize login frequency.
+        Authenticate with Instagram using browser cookies.
+        Bypasses soft bans by injecting existing session cookies from browser.
         """
-        session_file = Path(Config.SESSION_FILE)
+        try:
+            # Import browser_cookie3 inside function to avoid dependency issues
+            import browser_cookie3
+        except ImportError:
+            self.safety.log_progress(
+                "❌ browser_cookie3 not installed. Run: pip install browser-cookie3",
+                'error'
+            )
+            return False
+        
+        self.safety.log_progress("🍪 Loading Instagram cookies from browser...")
+        
+        # Try browsers in order: Chrome → Edge → Firefox
+        browsers = [
+            ('Chrome', lambda: browser_cookie3.chrome(domain_name='.instagram.com')),
+            ('Edge', lambda: browser_cookie3.edge(domain_name='.instagram.com')),
+            ('Firefox', lambda: browser_cookie3.firefox(domain_name='.instagram.com'))
+        ]
+        
+        cookies_loaded = False
+        
+        for browser_name, cookie_loader in browsers:
+            try:
+                self.safety.log_progress(f"  Trying {browser_name}...")
+                cookies = cookie_loader()
+                
+                # Apply cookies to instaloader session
+                self.loader.context._session.cookies = cookies
+                cookies_loaded = True
+                self.safety.log_progress(f"  ✅ Cookies loaded from {browser_name}")
+                break
+                
+            except PermissionError as e:
+                self.safety.log_progress(
+                    f"  ⚠️  {browser_name} database locked. Close {browser_name} and try again.",
+                    'warning'
+                )
+                continue
+            except Exception as e:
+                # Browser not found or no cookies - try next
+                self.safety.log_progress(f"  ⏭️  {browser_name} not available", 'debug')
+                continue
+        
+        if not cookies_loaded:
+            self.safety.log_progress(
+                "❌ Could not load cookies from any browser.\n"
+                "   Make sure you're logged into Instagram in Chrome, Edge, or Firefox.\n"
+                "   If browser is open, close it to unlock the cookie database.",
+                'error'
+            )
+            return False
+        
+        # Verify authentication by attempting to get own profile
+        self.safety.log_progress("🔍 Verifying authentication...")
         
         try:
-            # Try to load existing session
-            if session_file.exists():
-                self.safety.log_progress("🔑 Loading existing session...")
-                username = Config.INSTAGRAM_USERNAME or input("Instagram Username: ")
-                self.loader.load_session_from_file(username, session_file)
-                self.safety.log_progress("✅ Session loaded successfully")
-                return True
-        except Exception as e:
-            self.safety.log_progress(f"⚠️  Could not load session: {e}", 'warning')
-        
-        # Fresh login required
-        username, password = Config.get_credentials()
-        
-        self.safety.log_progress(f"🔐 Logging in as {username}...")
-        
-        try:
-            self.loader.login(username, password)
+            # Try to access Instagram API with loaded cookies
+            username = Config.INSTAGRAM_USERNAME or 'instagram'  # Fallback to any username
+            test_profile = instaloader.Profile.from_username(
+                self.loader.context,
+                username
+            )
             
-            # Save session for future use
-            self.loader.save_session_to_file(session_file)
-            self.safety.log_progress("✅ Login successful! Session saved.")
+            self.safety.log_progress("✅ Authentication verified! Ready to scout trends.")
             return True
             
         except Exception as e:
-            self.safety.log_progress(f"❌ Login failed: {e}", 'error')
+            error_msg = str(e).lower()
+            
+            if 'login' in error_msg or 'authentication' in error_msg or '401' in error_msg:
+                self.safety.log_progress(
+                    "❌ Cookie authentication failed. Possible causes:\n"
+                    "   1. Instagram session expired - log in again in your browser\n"
+                    "   2. Instagram detected automation - wait a few hours\n"
+                    "   3. Cookies not properly loaded - ensure you're logged in",
+                    'error'
+                )
+            else:
+                self.safety.log_progress(
+                    f"❌ Verification failed: {e}\n"
+                    "   Try logging into Instagram in your browser and run again.",
+                    'error'
+                )
+            
             return False
     
     def check_age_and_engagement_floor(self, post) -> tuple[bool, int, int]:
