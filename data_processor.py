@@ -116,9 +116,10 @@ class PostProcessor:
             post.comments
         )
         
-        # Get media URL (prefer high-res)
+        # Get media URL (prefer high-res, handle None safely)
         if post.typename == 'GraphVideo':
-            media_url = post.video_url
+            # video_url might be None if video wasn't downloaded
+            media_url = getattr(post, 'video_url', None) or post.url
         else:
             media_url = post.url
         

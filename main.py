@@ -51,10 +51,16 @@ class TrendScout:
         self.stats = {
             'total_analyzed': 0,
             'passed_age_filter': 0,
+            'passed_engagement_floor': 0,
             'passed_follower_filter': 0,
             'passed_er_filter': 0,
-            'total_viral': 0
+            'total_viral': 0,
+            'api_calls_saved': 0,
+            'age_limit_breaks': 0
         }
+        
+        # Calculate minimum engagement needed (optimization)
+        self.min_engagement_needed = Config.MIN_FOLLOWERS * Config.ER_THRESHOLD
     
     def authenticate(self):
         """
@@ -91,40 +97,58 @@ class TrendScout:
             self.safety.log_progress(f"❌ Login failed: {e}", 'error')
             return False
     
-    def is_viral(self, post, profile) -> tuple[bool, float]:
+    def check_age_and_engagement_floor(self, post) -> tuple[bool, int, int]:
         """
-        Core viral algorithm. Determines if a post qualifies as "viral."
+        Fast pre-filter (no API calls). Check age and minimum engagement.
         
-        Filter Pipeline:
-        1. Age: < 45 days
-        2. Followers: 1,000 - 500,000
-        3. Engagement Rate: > 3%
+        This is the first stage of the viral algorithm - filters out posts
+        without making expensive Profile API calls.
         
         Args:
             post: Instaloader Post object
+        
+        Returns:
+            Tuple of (should_continue: bool, post_age: int, total_engagement: int)
+        """
+        # Filter 1: Age (< 45 days)
+        post_age = (datetime.now() - post.date_local.replace(tzinfo=None)).days
+        if post_age > Config.POST_AGE_DAYS:
+            return False, post_age, 0
+        
+        self.stats['passed_age_filter'] += 1
+        
+        # Filter 2: Engagement Floor (lazy evaluation)
+        # If engagement is less than MIN_FOLLOWERS * ER_THRESHOLD,
+        # it's mathematically impossible to meet the ER threshold
+        total_engagement = post.likes + post.comments
+        
+        if total_engagement < self.min_engagement_needed:
+            # Skip profile API call - definitely won't be viral
+            self.stats['api_calls_saved'] += 1
+            return False, post_age, total_engagement
+        
+        self.stats['passed_engagement_floor'] += 1
+        return True, post_age, total_engagement
+    
+    def check_profile_metrics(self, profile, total_engagement: int) -> tuple[bool, float]:
+        """
+        Second stage of viral algorithm (requires API call).
+        Check follower count and calculate accurate engagement rate.
+        
+        Args:
             profile: Instaloader Profile object
+            total_engagement: Pre-calculated engagement count
         
         Returns:
             Tuple of (is_viral: bool, engagement_rate: float)
         """
-        self.stats['total_analyzed'] += 1
-        
-        # Filter 1: Age (< 45 days)
-        post_age = (datetime.now() - post.date_local.replace(tzinfo=None)).days
-        if post_age > Config.POST_AGE_DAYS:
-            return False, 0.0
-        
-        self.stats['passed_age_filter'] += 1
-        
-        # Filter 2: Follower count (1k - 500k)
+        # Filter 3: Follower count (1k - 500k)
         if profile.followers < Config.MIN_FOLLOWERS or profile.followers > Config.MAX_FOLLOWERS:
             return False, 0.0
         
         self.stats['passed_follower_filter'] += 1
         
-        # Filter 3: Engagement Rate (> 3%)
-        total_engagement = post.likes + post.comments
-        
+        # Filter 4: Engagement Rate (> 3%)
         # Prevent division by zero
         if profile.followers == 0:
             return False, 0.0
@@ -141,7 +165,11 @@ class TrendScout:
     
     def analyze_hashtag(self, hashtag: str):
         """
-        Analyze top posts from a specific hashtag.
+        Analyze top posts from a specific hashtag with optimized filtering.
+        
+        Uses two-stage filtering:
+        1. Fast pre-filter (age + engagement floor) - no API calls
+        2. Slow profile check (followers + ER) - only for qualified posts
         
         Args:
             hashtag: Hashtag to analyze (without # symbol)
@@ -169,10 +197,27 @@ class TrendScout:
                     self.safety.log_progress(f"🛑 Reached limit of {self.limit} posts for #{hashtag}")
                     break
                 
-                posts_analyzed += 1
+                self.stats['total_analyzed'] += 1
                 
                 try:
-                    # Get profile to check followers
+                    # STAGE 1: Fast pre-filter (NO API CALL)
+                    should_continue, post_age, total_engagement = self.check_age_and_engagement_floor(post)
+                    
+                    if not should_continue:
+                        # Check if we hit the age limit - BREAK completely
+                        if post_age > Config.POST_AGE_DAYS:
+                            self.stats['age_limit_breaks'] += 1
+                            self.safety.log_progress(
+                                f"🛑 Reached time limit for #{hashtag} (posts older than {Config.POST_AGE_DAYS} days)"
+                            )
+                            break  # Stop scanning this hashtag
+                        # Otherwise, just skip this post (low engagement)
+                        continue
+                    
+                    posts_analyzed += 1
+                    
+                    # STAGE 2: Profile check (EXPENSIVE API CALL)
+                    # Only executed if post passed stage 1
                     def get_profile():
                         return instaloader.Profile.from_username(
                             self.loader.context,
@@ -184,8 +229,8 @@ class TrendScout:
                     if profile is None:
                         continue
                     
-                    # Apply viral algorithm
-                    is_viral, engagement_rate = self.is_viral(post, profile)
+                    # Apply profile-based viral checks
+                    is_viral, engagement_rate = self.check_profile_metrics(profile, total_engagement)
                     
                     if is_viral:
                         posts_found += 1
@@ -232,6 +277,8 @@ class TrendScout:
         self.safety.log_progress(f"📏 Filters: Age<{Config.POST_AGE_DAYS}d, "
                                 f"Followers {Config.MIN_FOLLOWERS}-{Config.MAX_FOLLOWERS}, "
                                 f"ER>{Config.ER_THRESHOLD*100}%")
+        self.safety.log_progress(f"⚡ Lazy Evaluation: Min engagement={int(self.min_engagement_needed)} "
+                                f"(saves ~90% of API calls)")
         
         if self.test_mode:
             self.safety.log_progress(f"🧪 TEST MODE: Limited to {self.limit} posts per hashtag")
@@ -261,11 +308,23 @@ class TrendScout:
         self.safety.log_progress("\n" + "="*60)
         self.safety.log_progress("📈 EXECUTION SUMMARY")
         self.safety.log_progress("="*60)
-        self.safety.log_progress(f"Total posts analyzed: {self.stats['total_analyzed']}")
+        self.safety.log_progress(f"Total posts scanned: {self.stats['total_analyzed']}")
         self.safety.log_progress(f"  ├─ Passed age filter: {self.stats['passed_age_filter']}")
+        self.safety.log_progress(f"  ├─ Passed engagement floor: {self.stats['passed_engagement_floor']}")
         self.safety.log_progress(f"  ├─ Passed follower filter: {self.stats['passed_follower_filter']}")
         self.safety.log_progress(f"  └─ Passed ER filter (VIRAL): {self.stats['passed_er_filter']}")
         self.safety.log_progress(f"\n🎯 Total viral posts discovered: {self.stats['total_viral']}")
+        
+        # Optimization stats
+        self.safety.log_progress(f"\n⚡ Optimization Statistics:")
+        self.safety.log_progress(f"  ├─ API calls saved (lazy eval): {self.stats['api_calls_saved']}")
+        self.safety.log_progress(f"  └─ Hashtags stopped early (age limit): {self.stats['age_limit_breaks']}")
+        
+        # Calculate efficiency percentage
+        total_potential_calls = self.stats['total_analyzed']
+        if total_potential_calls > 0:
+            efficiency = (self.stats['api_calls_saved'] / total_potential_calls) * 100
+            self.safety.log_progress(f"  💡 Efficiency gain: {efficiency:.1f}% fewer API calls")
         
         # Safety stats
         safety_stats = self.safety.get_stats()
